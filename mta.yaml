@@ -1,0 +1,114 @@
+_schema-version: 3.3.0
+ID: salesquotationagent
+version: 1.0.0
+description: "Sales Quotation to Purchase Order Agent Service"
+
+parameters:
+  enable-parallel-deployments: true
+  SCHEMA_NAME: salesquotationagent
+
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npx cds build --production
+        - npm --prefix gen/pg pkg set engines.node="^22"
+
+modules:
+  - name: salesquotationa-srv
+    type: nodejs
+    path: gen/srv
+    parameters:
+      instances: 1
+      buildpack: nodejs_buildpack
+      readiness-health-check-type: http
+      readiness-health-check-http-endpoint: /health
+      disk-quota: 10240M
+      memory: 512M
+    build-parameters:
+      builder: npm-ci
+    properties:
+      SCHEMA_NAME: ${SCHEMA_NAME}
+      CDS_CONFIG: |
+        {
+          "requires": {
+            "auth": {
+              "kind": "dummy"
+            },
+            "db": {
+              "credentials": {
+                "schema": "${SCHEMA_NAME}\", \"public"
+              }
+            }
+          }
+        }
+
+    provides:
+      - name: srv-api
+        properties:
+          srv-url: ${default-url}
+
+    requires:
+      - name: salesquotationagent-postgres
+      - name: salesquotationagent-destination
+      - name: salesquotationagent-aicore
+
+  - name: salesquotationagent-schema-deployer
+    type: nodejs
+    path: schema-deployer
+    properties:
+      SCHEMA_NAME: ${SCHEMA_NAME}
+    parameters:
+      disk-quota: 4096M
+      memory: 256M
+      buildpack: nodejs_buildpack
+      no-route: true
+      no-start: true
+      tasks:
+        - name: schema-create-postgresql
+          command: npm start
+    requires:
+      - name: salesquotationagent-postgres
+
+  - name: salesquotationagent-postgres-deployer
+    type: nodejs
+    path: gen/pg
+    properties:
+      SCHEMA_NAME: ${SCHEMA_NAME}
+      CDS_CONFIG: |
+        {
+          "requires": {
+            "db": {
+              "credentials": {
+                "schema": "${SCHEMA_NAME}\", \"public"
+              }
+            }
+          }
+        }
+    parameters:
+      buildpack: nodejs_buildpack
+      no-route: true
+      no-start: true
+      tasks:
+        - name: deploy-to-postgresql
+          command: npm start
+    requires:
+      - name: salesquotationagent-postgres
+      - name: salesquotationagent-schema-deployer
+
+resources:
+  - name: salesquotationagent-postgres
+    type: org.cloudfoundry.existing-service
+    parameters:
+      service-name: joule-js-postgres
+
+  - name: salesquotationagent-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+
+  - name: salesquotationagent-aicore
+    type: org.cloudfoundry.existing-service
+    parameters:
+      service-name: TestAICore

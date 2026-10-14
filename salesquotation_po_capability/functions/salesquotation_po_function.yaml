@@ -1,0 +1,99 @@
+parameters:
+  - name: agent_context_id
+    optional: true
+  - name: agent_task_id
+    optional: true
+
+action_groups:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STEP 1: Send user query to CAP remote agent
+  # ─────────────────────────────────────────────────────────────────────────────
+  - actions:
+      - type: agent-request
+        system_alias: SALESQUOTATION_AGENT
+        agent_type: remote
+        body:
+          contextId: "<? agent_context_id ?>"
+          taskId: "<? agent_task_id ?>"
+        result_variable: apiResponse
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PATH A: Agent completed directly (e.g., supplier lookup, product lookup, PO creation)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - condition: apiResponse.body != null && apiResponse.body.status != null && apiResponse.body.status.state == "completed" && apiResponse.body.status.message != null && apiResponse.body.status.message.parts != null && apiResponse.body.status.message.parts.size() > 0
+    actions:
+      - type: message
+        message:
+          type: text
+          content: "<? apiResponse.body.status.message.parts[0].text ?>"
+          markdown: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PATH B: Agent asks for confirmation or input before creating the PO
+  # ─────────────────────────────────────────────────────────────────────────────
+  - condition: apiResponse.body != null && apiResponse.body.status != null && apiResponse.body.status.state == "input-required" && apiResponse.body.status.message != null && apiResponse.body.status.message.parts != null && apiResponse.body.status.message.parts.size() > 0
+    actions:
+      - type: message
+        message:
+          type: text
+          content: "<? apiResponse.body.status.message.parts[0].text ?>"
+          markdown: true
+      - type: user-confirmation
+        content:
+          title: "Approve Purchase Order Creation"
+          subtitle: "Please review the supplier, material, and pricing details above before confirming creation in SAP S/4HANA."
+          button_labels:
+            confirm: "Approve"
+            cancel: "Decline"
+        confirmation_variable: approvalDecision
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PATH C: User approved creation
+  # ─────────────────────────────────────────────────────────────────────────────
+  - condition: approvalDecision == true
+    actions:
+      - type: agent-request
+        system_alias: SALESQUOTATION_AGENT
+        agent_type: remote
+        body:
+          message: "approve"
+          contextId: "<? apiResponse.body.contextId ?>"
+          taskId: "<? apiResponse.body.id ?>"
+        result_variable: approvalResponse
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PATH D: User declined creation
+  # ─────────────────────────────────────────────────────────────────────────────
+  - condition: approvalDecision == false
+    actions:
+      - type: agent-request
+        system_alias: SALESQUOTATION_AGENT
+        agent_type: remote
+        body:
+          message: "reject"
+          contextId: "<? apiResponse.body.contextId ?>"
+          taskId: "<? apiResponse.body.id ?>"
+        result_variable: rejectionResponse
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STEP 3: Display post-approval or post-rejection responses
+  # ─────────────────────────────────────────────────────────────────────────────
+  - condition: approvalResponse != null && approvalResponse.body != null && approvalResponse.body.status != null && approvalResponse.body.status.message != null && approvalResponse.body.status.message.parts != null && approvalResponse.body.status.message.parts.size() > 0
+    actions:
+      - type: message
+        message:
+          type: text
+          content: "<? approvalResponse.body.status.message.parts[0].text ?>"
+          markdown: true
+
+  - condition: rejectionResponse != null && rejectionResponse.body != null && rejectionResponse.body.status != null && rejectionResponse.body.status.message != null && rejectionResponse.body.status.message.parts != null && rejectionResponse.body.status.message.parts.size() > 0
+    actions:
+      - type: message
+        message:
+          type: text
+          content: "<? rejectionResponse.body.status.message.parts[0].text ?>"
+          markdown: true
+
+result:
+  agent_context_id: "<? approvalResponse != null && approvalResponse.body != null && approvalResponse.body.contextId != null ? approvalResponse.body.contextId : (rejectionResponse != null && rejectionResponse.body != null && rejectionResponse.body.contextId != null ? rejectionResponse.body.contextId : (apiResponse != null && apiResponse.body != null && apiResponse.body.contextId != null ? apiResponse.body.contextId : (agent_context_id != null ? agent_context_id : '')))) ?>"
+  agent_task_id: "<? approvalResponse != null && approvalResponse.body != null && approvalResponse.body.status != null && approvalResponse.body.status.state == 'input-required' ? approvalResponse.body.id : (rejectionResponse != null && rejectionResponse.body != null && rejectionResponse.body.status != null && rejectionResponse.body.status.state == 'input-required' ? rejectionResponse.body.id : (apiResponse != null && apiResponse.body != null && apiResponse.body.status != null && apiResponse.body.status.state == 'input-required' ? (apiResponse.body.id != null ? apiResponse.body.id : (apiResponse.body.taskId != null ? apiResponse.body.taskId : '')) : '')) ?>"

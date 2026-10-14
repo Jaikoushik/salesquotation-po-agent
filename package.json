@@ -1,0 +1,125 @@
+{
+  "name": "salesquotation-po-agent",
+  "version": "1.0.0",
+  "description": "A simple CAP project.",
+  "dependencies": {
+    "@cap-js/agents": "^0.9.8",
+    "@cap-js/postgres": "^2.3.3",
+    "@sap-cloud-sdk/connectivity": "^4",
+    "@sap-cloud-sdk/http-client": "^4",
+    "@sap-cloud-sdk/resilience": "^4",
+    "@sap/cds": "^9",
+    "express": "^4"
+  },
+  "devDependencies": {
+    "@cap-js/sqlite": "^2"
+  },
+  "scripts": {
+    "start": "cds-serve",
+    "dump-embeddings": "node scripts/dumpEmbeddingsToDb.js",
+    "export-embeddings": "node scripts/exportEmbeddingsFromDb.js"
+  },
+  "private": true,
+  "cds": {
+    "agents": {
+      "params": {
+        "max_tokens": 4096,
+        "temperature": 0
+      },
+      "quotas": {
+        "maxLLMCallTimeout": "100s",
+        "maxExecutionTimePerTask": "10min",
+        "maxIncomingMessageLength": 2000000,
+        "maxTasksPerHourPerUser": 1000,
+        "maxTasksPerHour": 1000,
+        "maxConcurrentTasksPerUser": 100,
+        "maxConcurrentTasks": 200,
+        "maxLLMTokensPerTask": 200000,
+        "maxLLMTokensPerDay": 50000000,
+        "maxLLMInvocationsPerTask": 100,
+        "maxToolCallsPerTask": 100,
+        "maxToolCallsPerHour": 10000
+      },
+      "fileIO": {
+        "enabled": false,
+        "maxInputFileSizeBytes": 10485760,
+        "maxOutputFileSizeBytes": 10485760,
+        "defaultInputModes": [
+          "text/csv",
+          "application/json",
+          "text/plain",
+          "text/markdown",
+          "text/xml",
+          "application/xml",
+          "application/yaml",
+          "application/x-yaml",
+          "application/pdf",
+          "image/png",
+          "image/jpeg",
+          "image/webp"
+        ],
+        "defaultOutputModes": [
+          "text/csv",
+          "application/json",
+          "text/plain",
+          "text/markdown",
+          "text/xml",
+          "application/xml",
+          "application/yaml",
+          "application/x-yaml",
+          "application/pdf",
+          "image/png",
+          "image/jpeg",
+          "image/webp"
+        ]
+      }
+    },
+    "requires": {
+      "auth": {
+        "kind": "dummy"
+      },
+      "db": {
+        "[production]": {
+          "kind": "postgres"
+        }
+      },
+      "llm": {
+        "kind": "aicore",
+        "model": "gpt-4o",
+        "resourceGroup": "testus",
+        "contentFilter": false
+      },
+      "PURCHASEORDER_0001": {
+        "kind": "odata",
+        "model": "srv/external/PURCHASEORDER_0001",
+        "csrf": true,
+        "[production]": {
+          "credentials": {
+            "destination": "S4HANA_JOULE",
+            "path": "/sap/opu/odata4/sap/api_purchaseorder_2/srvd_a2x/sap/purchaseorder/0001"
+          }
+        }
+      },
+      "API_BUSINESS_PARTNER_0001": {
+        "kind": "odata-v2",
+        "model": "srv/external/API_BUSINESS_PARTNER_0001",
+        "[production]": {
+          "credentials": {
+            "destination": "S4HANA_JOULE",
+            "path": "/sap/opu/odata/sap/API_BUSINESS_PARTNER"
+          }
+        }
+      },
+      "API_PRODUCT_SRV_0001": {
+        "kind": "odata-v2",
+        "model": "srv/external/API_PRODUCT_SRV_0001",
+        "[production]": {
+          "credentials": {
+            "destination": "S4HANA_JOULE",
+            "path": "/sap/opu/odata/sap/API_PRODUCT_SRV"
+          }
+        }
+      }
+    }
+  }
+}

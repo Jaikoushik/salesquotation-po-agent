@@ -1,0 +1,12 @@
+schema_version: 3.28.0
+
+metadata:
+  namespace: joule.ext
+  name: salesquotation_po_capability
+  version: 1.0.0
+  display_name: Sales Quotation to Purchase Order Capability
+  description: Procurement assistant for looking up suppliers, validating materials, and creating Purchase Orders from sales quotations in SAP S/4HANA.
+
+system_aliases:
+  SALESQUOTATION_AGENT:
+    destination: SALESQUOTATION_AGENT
