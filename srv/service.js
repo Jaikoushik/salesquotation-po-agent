@@ -9,6 +9,7 @@ global.setTimeout = function (fn, delay, ...args) {
 
 const cds = require('@sap/cds');
 const embeddingMatcher = require('./embeddingMatcher');
+const quotationExtractor = require('./quotationExtractor');
 
 /**
  * POAgentService — Tool Handlers
@@ -29,9 +30,184 @@ module.exports = class POAgentService extends cds.ApplicationService {
         this.bpAPI   = await cds.connect.to('API_BUSINESS_PARTNER_0001');
         this.prodAPI = await cds.connect.to('API_PRODUCT_SRV_0001');
 
+        // ── Connect to application database ──────────────────────────────────
+        this.db = await cds.connect.to('db');
+
         // ── Initialize pgvector Embeddings Matcher (PostgreSQL) in Background ──
         embeddingMatcher.init().catch(err => {
             console.warn('[EmbeddingMatcher] Background init notice:', err.message);
+        });
+
+        // ── Tool: requestDocumentUpload (HITL trigger for Joule upload popup) ──
+        this.on('requestDocumentUpload', async (req) => {
+            const reason = req.data.reason || 'Please upload the Sales Quotation document (PDF or image).';
+            console.log(`[requestDocumentUpload] HITL triggered for Joule. Reason: ${reason}`);
+            return `requestDocumentUpload: ${reason}. Please choose a Sales Quotation PDF or image to upload.`;
+        });
+
+        // ── Tool: uploadSalesQuotation ────────────────────────────────────────
+        this.on('uploadSalesQuotation', async (req) => {
+            const { fileName, mimeType, content, conversationId } = req.data;
+            if (!content) {
+                req.reject(400, 'Document content is required.');
+            }
+
+            try {
+                const buffer = Buffer.from(content, 'base64');
+                const result = await quotationExtractor.processQuotationBuffer(
+                    this.db,
+                    buffer,
+                    fileName || 'quotation.pdf',
+                    mimeType || 'application/pdf',
+                    conversationId || req.headers?.['x-conversation-id'] || ''
+                );
+                return JSON.stringify(result);
+            } catch (err) {
+                console.error('[uploadSalesQuotation Error]:', err);
+                req.reject(500, `Quotation upload & parsing failed: ${err.message}`);
+            }
+        });
+
+        // ── Tool: getUploadedDocument ─────────────────────────────────────────
+        this.on('getUploadedDocument', async (req) => {
+            const { documentId } = req.data;
+            if (!documentId) req.reject(400, 'documentId is required');
+
+            try {
+                const { UploadedDocuments } = this.entities;
+                const doc = await this.db.run(
+                    SELECT.one.from(UploadedDocuments).where({ ID: documentId })
+                );
+                if (!doc) req.reject(404, `Document ${documentId} not found`);
+
+                // Strip heavy raw base64 data from response
+                const { base64Data, ...cleanDoc } = doc;
+                return JSON.stringify(cleanDoc);
+            } catch (err) {
+                req.reject(500, `Failed to retrieve document: ${err.message}`);
+            }
+        });
+
+        // ── Tool: listUploadedDocuments ───────────────────────────────────────
+        this.on('listUploadedDocuments', async (req) => {
+            try {
+                const { UploadedDocuments } = this.entities;
+                const convId = req.headers?.['x-conversation-id'] || req.headers?.['conversationid'] || req.query?.conversationId;
+                let query = SELECT.from(UploadedDocuments);
+                if (convId) {
+                    query = query.where({ conversationId: String(convId).trim() });
+                }
+                const docs = await this.db.run(
+                    query.columns('ID', 'fileName', 'contentType', 'processingStatus', 'quotationNumber', 'supplierName', 'grossAmount', 'currency', 'extractedJson', 'createdAt')
+                        .orderBy`createdAt desc`
+                        .limit(5)
+                );
+                return JSON.stringify(docs || []);
+            } catch (err) {
+                req.reject(500, `Failed to list documents: ${err.message}`);
+            }
+        });
+
+        // ── Tool: createPOFromQuotation ───────────────────────────────────────
+        this.on('createPOFromQuotation', async (req) => {
+            const {
+                documentId,
+                purchasingOrganization = '1000',
+                purchasingGroup = '100',
+                companyCode = '1000',
+                plant = '1120',
+                taxCode,
+                storageLocation
+            } = req.data;
+
+            if (!documentId) req.reject(400, 'documentId is required');
+
+            try {
+                const { UploadedDocuments, SalesQuotationDrafts } = this.entities;
+                const doc = await this.db.run(
+                    SELECT.one.from(UploadedDocuments).where({ ID: documentId })
+                );
+
+                if (!doc) req.reject(404, `Document ${documentId} not found`);
+
+                let parsedInfo;
+                try {
+                    parsedInfo = typeof doc.extractedJson === 'string'
+                        ? JSON.parse(doc.extractedJson)
+                        : doc.extractedJson;
+                } catch (_) {
+                    parsedInfo = {};
+                }
+
+                const extracted = parsedInfo.extractedData || {};
+                const harmonized = parsedInfo.harmonization || {};
+
+                // Use harmonized supplier or fall back
+                const supplierId = harmonized.supplier?.matchedSupplierId
+                    || doc.supplierId
+                    || '1000000';
+
+                // Map items
+                const harmonizedItems = harmonized.items || [];
+                const poItems = harmonizedItems.map(it => ({
+                    material: it.matchedMaterial || it.extractedDescription,
+                    plant: plant || it.plant || '1120',
+                    orderQuantity: it.extractedQuantity || 1,
+                    orderQuantityUnit: it.matchedBaseUnit || it.extractedUnit || 'KG',
+                    netPriceAmount: it.extractedUnitPrice > 0 ? it.extractedUnitPrice : 50,
+                    priceUnit: 1,
+                    taxCode: taxCode || it.taxCode || undefined,
+                    storageLocation: storageLocation || it.storageLocation || undefined
+                }));
+
+                // Execute postPurchaseOrder action directly
+                const poResult = await this.send('postPurchaseOrder', {
+                    purchaseOrderType: 'NB',
+                    supplier: supplierId,
+                    purchasingOrganization,
+                    purchasingGroup,
+                    companyCode,
+                    documentCurrency: extracted.currency || 'INR',
+                    items: poItems
+                });
+
+                // Persist draft and result in SalesQuotationDrafts
+                try {
+                    const draftRecord = {
+                        ID: cds.utils.uuid(),
+                        documentId: doc.ID,
+                        fileName: doc.fileName,
+                        quotationNumber: doc.quotationNumber,
+                        supplier: supplierId,
+                        supplierName: harmonized.supplier?.matchedName || doc.supplierName,
+                        purchasingOrg: purchasingOrganization,
+                        purchasingGroup,
+                        companyCode,
+                        plant,
+                        documentCurrency: extracted.currency || 'INR',
+                        grossAmount: doc.grossAmount,
+                        payload: JSON.stringify(poItems),
+                        conversationId: doc.conversationId,
+                        status: poResult.success ? 'POSTED' : 'FAILED',
+                        statusMessage: poResult.message,
+                        sapPurchaseOrder: poResult.purchaseOrderNumber || null,
+                        postedAt: poResult.success ? new Date().toISOString() : null
+                    };
+                    await this.db.run(INSERT.into(SalesQuotationDrafts).entries(draftRecord));
+                } catch (draftErr) {
+                    console.warn('[createPOFromQuotation] Notice storing draft record:', draftErr.message);
+                }
+
+                return poResult;
+
+            } catch (err) {
+                console.error('[createPOFromQuotation Error]:', err);
+                return {
+                    success: false,
+                    purchaseOrderNumber: null,
+                    message: `Failed to create PO from quotation: ${err.message}`
+                };
+            }
         });
 
         // ── Tool: lookupSupplier ──────────────────────────────────────────────

@@ -29,9 +29,66 @@ action_groups:
           markdown: true
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # PATH UPLOAD: Agent requests document upload -> Joule native file-upload popup
+  # ─────────────────────────────────────────────────────────────────────────────
+  - condition: apiResponse.body != null && apiResponse.body.status != null && apiResponse.body.status.state == "input-required" && apiResponse.body.status.message != null && apiResponse.body.status.message.parts != null && apiResponse.body.status.message.parts[0].text.contains("requestDocumentUpload")
+    actions:
+      - type: file-upload
+        scripting_type: "spel"
+        content:
+          message: "Please choose sales quotation document (PDF or image) to upload."
+          on_cancel:
+            title: "Cancel Upload"
+            message: "Are you sure you want to cancel the sales quotation upload?"
+            button_labels:
+              cancel: "yes"
+              continue: "no"
+        allowed_file_types:
+          - pdf
+          - png
+          - jpg
+          - jpeg
+        max_file_size: "10485760" # 10 MB per file
+        max_files_allowed: 1
+        result_variable: uploaded_file
+
+  - condition: uploaded_file != null && uploaded_file.files != null && uploaded_file.files.size() > 0
+    actions:
+      - type: api-request
+        method: POST
+        headers:
+          Content-Type: application/octet-stream
+          Accept: application/json
+          X-File-Name: "<? uploaded_file.files.get(0).filename ?>"
+          X-File-ID: "<? uploaded_file.files.get(0).file_reference_id ?>"
+          X-Conversation-ID: "<? (apiResponse != null && apiResponse.body != null && apiResponse.body.contextId != null) ? apiResponse.body.contextId : (agent_context_id != null ? agent_context_id : '') ?>"
+        system_alias: SALESQUOTATION_AGENT
+        path: /api/process-quotation
+        body: "<? uploaded_file.files.get(0).file_reference_id ?>"
+        result_variable: upload_result
+
+  - condition: upload_result != null
+    actions:
+      - type: agent-request
+        system_alias: SALESQUOTATION_AGENT
+        agent_type: remote
+        body:
+          message: "<? 'The sales quotation document has been uploaded (filename: ' + uploaded_file.files.get(0).filename + '). Please review the extracted details, resolve the supplier and products in SAP S/4HANA, and present the Purchase Order for confirmation.' ?>"
+          contextId: "<? (apiResponse != null && apiResponse.body != null && apiResponse.body.contextId != null) ? apiResponse.body.contextId : (agent_context_id != null ? agent_context_id : '') ?>"
+        result_variable: postUploadResponse
+
+  - condition: postUploadResponse != null && postUploadResponse.body != null && postUploadResponse.body.status != null && postUploadResponse.body.status.message != null && postUploadResponse.body.status.message.parts != null && postUploadResponse.body.status.message.parts.size() > 0
+    actions:
+      - type: message
+        message:
+          type: text
+          content: "<? postUploadResponse.body.status.message.parts[0].text ?>"
+          markdown: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # PATH B: Agent asks for confirmation or input before creating the PO
   # ─────────────────────────────────────────────────────────────────────────────
-  - condition: apiResponse.body != null && apiResponse.body.status != null && apiResponse.body.status.state == "input-required" && apiResponse.body.status.message != null && apiResponse.body.status.message.parts != null && apiResponse.body.status.message.parts.size() > 0
+  - condition: apiResponse.body != null && apiResponse.body.status != null && apiResponse.body.status.state == "input-required" && apiResponse.body.status.message != null && apiResponse.body.status.message.parts != null && apiResponse.body.status.message.parts.size() > 0 && !apiResponse.body.status.message.parts[0].text.contains("requestDocumentUpload")
     actions:
       - type: message
         message:
@@ -95,5 +152,5 @@ action_groups:
           markdown: true
 
 result:
-  agent_context_id: "<? approvalResponse != null && approvalResponse.body != null && approvalResponse.body.contextId != null ? approvalResponse.body.contextId : (rejectionResponse != null && rejectionResponse.body != null && rejectionResponse.body.contextId != null ? rejectionResponse.body.contextId : (apiResponse != null && apiResponse.body != null && apiResponse.body.contextId != null ? apiResponse.body.contextId : (agent_context_id != null ? agent_context_id : '')))) ?>"
-  agent_task_id: "<? approvalResponse != null && approvalResponse.body != null && approvalResponse.body.status != null && approvalResponse.body.status.state == 'input-required' ? approvalResponse.body.id : (rejectionResponse != null && rejectionResponse.body != null && rejectionResponse.body.status != null && rejectionResponse.body.status.state == 'input-required' ? rejectionResponse.body.id : (apiResponse != null && apiResponse.body != null && apiResponse.body.status != null && apiResponse.body.status.state == 'input-required' ? (apiResponse.body.id != null ? apiResponse.body.id : (apiResponse.body.taskId != null ? apiResponse.body.taskId : '')) : '')) ?>"
+  agent_context_id: "<? postUploadResponse != null && postUploadResponse.body != null && postUploadResponse.body.contextId != null ? postUploadResponse.body.contextId : (approvalResponse != null && approvalResponse.body != null && approvalResponse.body.contextId != null ? approvalResponse.body.contextId : (rejectionResponse != null && rejectionResponse.body != null && rejectionResponse.body.contextId != null ? rejectionResponse.body.contextId : (apiResponse != null && apiResponse.body != null && apiResponse.body.contextId != null ? apiResponse.body.contextId : (agent_context_id != null ? agent_context_id : '')))) ?>"
+  agent_task_id: "<? postUploadResponse != null && postUploadResponse.body != null && postUploadResponse.body.status != null && postUploadResponse.body.status.state == 'input-required' ? postUploadResponse.body.id : (approvalResponse != null && approvalResponse.body != null && approvalResponse.body.status != null && approvalResponse.body.status.state == 'input-required' ? approvalResponse.body.id : (rejectionResponse != null && rejectionResponse.body != null && rejectionResponse.body.status != null && rejectionResponse.body.status.state == 'input-required' ? rejectionResponse.body.id : (apiResponse != null && apiResponse.body != null && apiResponse.body.status != null && apiResponse.body.status.state == 'input-required' ? (apiResponse.body.id != null ? apiResponse.body.id : (apiResponse.body.taskId != null ? apiResponse.body.taskId : '')) : ''))) ?>"

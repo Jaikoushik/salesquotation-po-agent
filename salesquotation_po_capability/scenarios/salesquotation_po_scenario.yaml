@@ -1,13 +1,10 @@
 description: >
-  Create and manage Purchase Orders in SAP S/4HANA from sales quotation details:
-  lookup suppliers, validate products and materials, draft Purchase Orders,
-  and post Purchase Orders via OData V4.
-  Triggers on: "create a purchase order", "create purchase order", "create po",
-  "new purchase order", "new po", "convert sales quotation to purchase order",
-  "convert quotation to po", "create po from quotation", "create purchase order from sales quotation",
-  "purchase order from quote", "lookup supplier", "search supplier", "find supplier",
-  "lookup product", "search material", "find product", "order materials",
-  "draft purchase order", "draft po", "post purchase order", "post po",
+  Generate SAP S/4HANA Purchase Orders from supplier quote documents: upload vendor quotation PDFs,
+  extract pricing and line items with AI, match vendor and parts, and issue Purchase Orders.
+  Triggers on: "create purchase order from quote", "generate purchase order from vendor quotation",
+  "upload supplier quotation", "upload vendor quote", "upload quotation document", "upload quotation pdf",
+  "parse vendor quote", "extract quote details", "convert quote to purchase order", "convert quote to po",
+  "purchase order from quote", "po from supplier quotation", "issue purchase order from quotation",
   "approve", "reject", "confirm", "proceed", "yes", "ok".
 
 target:
